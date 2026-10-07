@@ -213,7 +213,7 @@ class PreferenceMemory:
 
         # 전부 검사한 뒤에 한꺼번에 반영한다. 두 번째 항목이 틀렸다고 실패를 돌려주면서
         # 첫 번째는 이미 저장돼 있으면, 모델은 "저장 안 됨" 으로 읽고 사용자에게 그렇게 말한다.
-        from tools_pg import normalize_size
+        from shopmate.agent.tools import normalize_size
 
         updates = {}
         for item in remember[:10]:
@@ -360,7 +360,7 @@ def verifier_messages(user_message, draft, trace, current_state, about_to_confir
                       recent_turns=None):
     """검증기 입력. about_to_confirm 이 있으면 '확인 버튼 직전' 단계의 검증이다.
 
-    recent_turns 는 이전 턴을 포함한 사용자 원문(최근 것이 먼저, filter_resolution.user_turns).
+    recent_turns 는 이전 턴을 포함한 사용자 원문(최근 것이 먼저, filter_rules.user_turns).
     이것 없이 이번 턴만 보면, 되묻기에 "상의" 라고 답한 턴에서 앞 턴의 "남자·10만원 이하" 가
     모델이 지어낸 조건으로 보여 검증기가 retry 를 두 번 냈다(2026-09-30 상담 기록).
     검색 Tool 의 필터 판정은 이미 같은 목록을 본다 — 검증기와 기준을 맞춘다.

@@ -7,11 +7,11 @@
   - 상태: 상품 목록, 장바구니, 주문 내역
   - 규칙: 재고 판정, 취소 가능 여부, 반품 가능 기간
 
-tools_pg.py 도 server.py 도 정책 판단을 직접 하지 않고 여기에 물어봅니다.
+agent/tools.py 도 server.py 도 정책 판단을 직접 하지 않고 여기에 물어봅니다.
 그래야 "can_cancel 은 된다고 했는데 cancel_order 는 거부하는" 모순이 생기지 않습니다.
 Tool 이 늘어나도 규칙은 여기 한 곳만 고치면 됩니다.
 
-이 파일은 웹도 LLM 도 모릅니다. 저장은 db_pg.py 에 맡깁니다.
+이 파일은 웹도 LLM 도 모릅니다. 저장은 store/db.py 에 맡깁니다.
 """
 
 from datetime import date, timedelta
@@ -20,9 +20,9 @@ from typing import NamedTuple
 import sys
 import threading
 
-import config
-import db_pg as db
-import event_pipeline
+from shopmate import config
+from shopmate.store import db
+from shopmate.store import events
 
 
 # --- 정책 상수 -------------------------------------------------------------
@@ -102,7 +102,7 @@ def _josa(word, pair="은는"):
 def _positive_int(value, label):
     """수량 값을 검사한다. 통과하면 int, 아니면 오류 메시지 문자열을 돌려준다.
 
-    tools_pg.py 가 이미 스키마로 검사하지만 여기서도 봅니다.
+    agent/tools.py 가 이미 스키마로 검사하지만 여기서도 봅니다.
     store 는 Tool 말고 화면(server.py)에서도 불리고, 나중에 다른 진입점이 생길 수도
     있습니다. 상태를 바꾸는 함수는 자기 입력을 스스로 지켜야 합니다.
     (음수 수량으로 장바구니가 1개에서 6개로 늘어난 적이 있습니다)
@@ -131,7 +131,7 @@ class Store:
     상태를 인스턴스 안에 들고 있으므로 세션마다 하나씩 만들면 서로 간섭하지 않습니다.
     서버는 사용자마다 Store 를 하나씩 둡니다 (server.Session).
 
-    데이터는 PostgreSQL 업무 DB 에서 읽습니다 (db_pg.py).
+    데이터는 PostgreSQL 업무 DB 에서 읽습니다 (store/db.py).
 
     캐시의 경계가 하나 있습니다. 이름·가격·색상처럼 실행 중에 바뀌지 않는 값은
     메모리에 올려도 낡지 않지만, 재고처럼 바뀌는 값은 캐시하면 낡습니다.
@@ -197,7 +197,7 @@ class Store:
                 " DO UPDATE SET quantity = excluded.quantity",
                 (self.user_id, variant_id, size, quantity),
             )
-        event_pipeline.enqueue(
+        events.enqueue(
             self.conn, "cart_updated", "cart", self.user_id,
             {"user_id": self.user_id, "variant_id": variant_id,
              "size": str(size), "quantity": quantity, "source": "runtime"},
@@ -307,7 +307,7 @@ class Store:
 
         color 와 category 는 **완전 일치**로 비교합니다.
         "블랙" 을 "검은색" 으로 바꾸는 일은 여기서 하지 않습니다.
-        그건 모델의 몫이고, tools_pg.py 스키마의 enum 이 유효한 값을 알려줍니다.
+        그건 모델의 몫이고, agent/tools.py 스키마의 enum 이 유효한 값을 알려줍니다.
         (자세한 이유는 아래 '왜 별칭 표를 쓰지 않는가' 참고)
 
         gender 는 "공용" 상품도 함께 반환합니다.
@@ -339,7 +339,7 @@ class Store:
 
         대신 두 가지로 처리합니다.
 
-          (1) tools_pg.py 스키마의 enum 이 유효한 값을 못박습니다.
+          (1) agent/tools.py 스키마의 enum 이 유효한 값을 못박습니다.
               모델이 "블랙"을 듣고도 enum 에 있는 "검은색"을 넣습니다.
 
           (2) 그래도 빗나가면 Tool 이 실패 메시지에 유효한 값을 실어 보냅니다.
@@ -404,8 +404,8 @@ class Store:
         # 1) 문서 벡터를 읽는다. 없으면 의미 검색을 끈다.
         #    (아직 상품 벡터를 만들지 않은 상태 — 정상적인 경우다)
         try:
-            import embed_pg as embed
-            ids, matrix = embed.load_matrix(self.conn)
+            from shopmate.search import text_embedding
+            ids, matrix = text_embedding.load_matrix(self.conn)
         except Exception as exc:
             print(f"[검색] 문서 벡터를 읽지 못했습니다 — 의미 검색을 끕니다: {exc}",
                   file=sys.stderr)
@@ -419,7 +419,7 @@ class Store:
         #    조용히 넘기지 않는다 — 예전에 이 except 가 소리 없이 의미 검색을
         #    통째로 끄는 바람에, 검색 결과가 이상해진 뒤에야 알아챘습니다.
         try:
-            backend = embed.query_backend(self.conn)
+            backend = text_embedding.query_backend(self.conn)
         except Exception as exc:
             print(f"[검색] 질의 백엔드를 만들지 못했습니다 — 의미 검색을 끕니다: "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr)
@@ -626,7 +626,7 @@ class Store:
     # ------------------------------------------------------------------
     # 아래 두 메서드는 "모델이 잘못된 값을 넣었을 때 스스로 고칠 수 있게"
     # 유효한 값을 알려주기 위한 것입니다. 별칭 표를 대신합니다.
-    # tools_pg.py 의 실패 메시지에서 사용합니다.
+    # agent/tools.py 의 실패 메시지에서 사용합니다.
     # ------------------------------------------------------------------
 
     def available_colors(self):
@@ -724,7 +724,7 @@ class Store:
 
         카테고리마다 사이즈 체계가 달라서(신발 220~290 / 상의 44~110 / 팬츠 25~36)
         모델이 엉뚱한 사이즈를 넣기 쉽습니다. 그때 이 목록을 알려주면 스스로 고칩니다.
-        tools_pg 의 상품 검색이 "결과 0건 + size 지정" 일 때 이걸 부릅니다.
+        tools 의 상품 검색이 "결과 0건 + size 지정" 일 때 이걸 부릅니다.
         """
         sizes = set()
         for product in self.products:
@@ -848,11 +848,11 @@ class Store:
         무엇을 얼마나 뺐는지 메시지에 구체적으로 남긴다.
         ("방금 삭제한 것 다시 담아줘" 를 처리하려면 이름·사이즈·수량이 필요하다)
 
-        확인 절차는 여기 없다. tools_pg.py 가 담당한다.
+        확인 절차는 여기 없다. agent/tools.py 가 담당한다.
         화면의 ✕ 버튼은 사용자가 직접 누른 것이므로 이미 확인이고,
         오해의 여지가 있는 것은 에이전트가 대화로 지우는 경우뿐이다.
 
-        tools_pg.py 의 description 과 이 규칙이 일치해야 한다.
+        agent/tools.py 의 description 과 이 규칙이 일치해야 한다.
         어긋나면 파이썬은 아무 말도 하지 않고 에이전트만 조용히 틀린 답을 한다.
 
         반환: (bool, str)
@@ -924,7 +924,7 @@ class Store:
         되돌릴 수 없는 작업은 실행 전에 사용자에게 보여줘야 합니다.
         can_cancel / can_return 이 "판정만 하고 상태는 안 바꾼다" 인 것과 같은 역할입니다.
 
-        확인 절차 자체는 tools_pg.py 가 담당합니다.
+        확인 절차 자체는 agent/tools.py 가 담당합니다.
         화면의 ✕ 버튼은 사용자가 직접 누른 것이므로 확인이 필요 없고,
         에이전트가 대화로 지우는 경우만 오해의 여지가 있기 때문입니다.
 
@@ -1170,7 +1170,7 @@ class Store:
                 # 여러 건을 살 때 같은 번호가 두 번 나옵니다.
                 self.orders.append(order)
                 self._persist_new_order(order)
-                event_pipeline.enqueue(
+                events.enqueue(
                     self.conn, "order_created", "order", order["order_id"],
                     {"user_id": self.user_id, "order_id": order["order_id"],
                      "product_id": order["product_id"],
@@ -1482,7 +1482,7 @@ class Store:
             db.give_back_stock(
                 self.conn, order["variant_id"], order["size"], order["quantity"]
             )
-            event_pipeline.enqueue(
+            events.enqueue(
                 self.conn, "order_cancelled", "order", order_id,
                 {"user_id": self.user_id, "order_id": order_id,
                  "product_id": order["product_id"],
@@ -1521,7 +1521,7 @@ class Store:
             self.conn.rollback()
             self._reload_order(order_id)
             return False, "주문 상태가 방금 바뀌어 반품을 접수하지 않았습니다. 주문을 다시 확인해 주세요."
-        event_pipeline.enqueue(
+        events.enqueue(
             self.conn, "return_requested", "order", order_id,
             {"user_id": self.user_id, "order_id": order_id,
              "product_id": order["product_id"], "reason": reason,

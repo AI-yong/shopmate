@@ -25,7 +25,7 @@ import uuid
 import psycopg
 from psycopg.types.json import Jsonb
 
-import config
+from shopmate import config
 
 SESSION_DSN = config.APP_SESSION_DSN   # 웹 서버 전용 최소 권한 계정 (config.py)
 
@@ -47,7 +47,7 @@ def save_agent_state(conn, user_id, state):
     """agent.snapshot() 이 준 dict 를 저장한다.
 
     pending 의 만료 시각을 expires_at 으로 끌어올립니다. 정책(몇 초인가, 무엇이
-    만료인가)은 여전히 agent.py 가 판단하고, 여기는 그 결과를 열에 적을 뿐입니다
+    만료인가)은 여전히 agent/loop.py 가 판단하고, 여기는 그 결과를 열에 적을 뿐입니다
     — 판단하는 곳이 둘이 되면 둘은 반드시 어긋납니다.
     """
     state = json.loads(json.dumps(state, ensure_ascii=False, default=str))

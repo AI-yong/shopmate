@@ -13,7 +13,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from qwen3_vl_embedding import EMBEDDING_DIM, Qwen3VLEncoder
+from encoder import EMBEDDING_DIM, Qwen3VLEncoder
 
 
 class VectorCache:

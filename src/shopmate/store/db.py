@@ -1,7 +1,7 @@
 """PostgreSQL 저장 계층.
 
 이 모듈이 아는 것은 "어떻게 저장하는가" 뿐입니다.
-"이 주문을 취소할 수 있는가" 같은 정책 판단은 store_pg.py 에 둡니다.
+"이 주문을 취소할 수 있는가" 같은 정책 판단은 store/shop.py 에 둡니다.
 판단하는 곳이 둘이 되면 둘은 반드시 어긋나기 때문입니다.
 그래서 여기에는 트리거도 뷰도 없습니다.
 
@@ -15,10 +15,10 @@
   embedding        vector(1024). HNSW 인덱스는 일부러 안 만든다
                    (측정: 필터 붙은 질의에서 10만 개 기준 64배 느림).
   날짜             date. 이 도메인은 시각이 아니라 날짜다. 읽을 때는 isoformat()
-                   문자열로 돌려준다 — store_pg.py 가 문자열로 비교한다.
+                   문자열로 돌려준다 — store/shop.py 가 문자열로 비교한다.
   줄 순서          명시적 seq(bigserial). "두 번째 거 담아줘" 가 화면 순서와 같아야 한다.
   결제 잠금        권고 잠금(pg_advisory_xact_lock). 주문번호 발급을 한 줄로 세운다.
-  에이전트 상태     여기 없다. 수명주기가 달라 세션 DB 로 분리했다 (session_db.py).
+  에이전트 상태     여기 없다. 수명주기가 달라 세션 DB 로 분리했다 (store/session_state.py).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from datetime import date, timedelta
 
 import psycopg
 
-import config
+from shopmate import config
 
 # 기본 사용자. 세션이 없는 곳(터미널 실행 등)은 이 사용자로 동작합니다.
 DEMO_USER_ID = "demo"
@@ -269,7 +269,7 @@ def purge_expired_web_sessions(conn):
 # 명시적 선호 — 사용자가 "기억해 줘" 라고 한 것만
 # --------------------------------------------------------------------------
 #
-# agency.PreferenceMemory.entries 와 같은 모양 {key: {"values": [...], "updated_at": epoch}}
+# verifier.PreferenceMemory.entries 와 같은 모양 {key: {"values": [...], "updated_at": epoch}}
 # 으로 주고받는다. 무엇을 저장할 수 있는가는 PreferenceMemory 가 판단하고,
 # 테이블의 CHECK 는 그 판단이 새어 나갔을 때의 마지막 방어선이다.
 
@@ -344,7 +344,7 @@ def give_back_stock(conn, variant_id, size, quantity):
 
 
 # --------------------------------------------------------------------------
-# 읽기 — store_pg.py 가 메모리 구조를 채울 때 쓴다
+# 읽기 — store/shop.py 가 메모리 구조를 채울 때 쓴다
 # --------------------------------------------------------------------------
 
 def fetch_media(conn):
@@ -368,7 +368,7 @@ def fetch_media(conn):
 
 
 def fetch_products(conn):
-    """상품을 store_pg.py 가 쓰는 모양으로 돌려준다.
+    """상품을 store/shop.py 가 쓰는 모양으로 돌려준다.
 
     색상이 variant 로 내려갔으므로 모양이 하나 늘었다.
 
@@ -586,14 +586,14 @@ def count_products(conn, **filters):
 
 
 def _iso(value):
-    """date -> 'YYYY-MM-DD'. store_pg.py 가 문자열로 비교하고 fromisoformat 으로 읽는다."""
+    """date -> 'YYYY-MM-DD'. store/shop.py 가 문자열로 비교하고 fromisoformat 으로 읽는다."""
     return None if value is None else value.isoformat()
 
 
 def fetch_orders(conn, user_id=DEMO_USER_ID):
     """주문을 Store.orders 가 쓰는 모양의 dict 리스트로 돌려준다.
 
-    날짜 열은 date 이지만 ISO 문자열로 돌려줍니다 — store_pg.py 의 정책 판단이
+    날짜 열은 date 이지만 ISO 문자열로 돌려줍니다 — store/shop.py 의 정책 판단이
     문자열 비교와 date.fromisoformat() 위에 서 있기 때문입니다. 저장은 제대로 된
     타입으로, 경계에서 변환합니다.
     """
@@ -683,7 +683,7 @@ def lock_cart_quantity(conn, user_id, variant_id, size):
 
 
 def fetch_cart(conn, products, user_id=DEMO_USER_ID):
-    """장바구니를 store_pg.py 가 쓰는 모양으로 돌려준다.
+    """장바구니를 store/shop.py 가 쓰는 모양으로 돌려준다.
 
     한 줄의 모양 — 색이 늘었다.
         {"product": <상품 dict 참조>, "color": "검은색",
@@ -843,7 +843,7 @@ def reset_user(conn, user_id):
     """한 사용자의 장바구니·주문·선호를 처음 상태로 되돌린다.
 
     상품과 재고는 사용자들이 함께 보는 카탈로그라 건드리지 않는다.
-    에이전트 상태는 세션 DB 에 있으므로 여기서 지우지 않는다 (session_db.delete_agent_state).
+    에이전트 상태는 세션 DB 에 있으므로 여기서 지우지 않는다 (session_state.delete_agent_state).
     """
     ensure_user(conn, user_id)
     conn.execute("DELETE FROM cart_items WHERE user_id = %s", (user_id,))

@@ -34,7 +34,7 @@ psql "$SESSION_DSN" -v ON_ERROR_STOP=1 -f deploy/schema_session.sql
 ```
 
 벡터 인덱스는 일부러 만들지 않습니다. 이 서비스의 질의는 거의 항상 카테고리·가격 필터가 붙는데,
-필터 뒤 정확 검색이 HNSW + 필터보다 빨랐습니다. 이벤트 테이블의 월별 파티션은 `event_pipeline.py`가 필요할 때 만듭니다.
+필터 뒤 정확 검색이 HNSW + 필터보다 빨랐습니다. 이벤트 테이블의 월별 파티션은 이벤트 워커(`shopmate.store.events`)가 필요할 때 만듭니다.
 
 ## 3. 웹 서버 전용 계정
 
@@ -52,15 +52,15 @@ psql "$SESSION_DSN" -f deploy/grants_session.sql
 
 채워야 할 테이블은 [루트 README](../README.md#상품-데이터)에 정리되어 있습니다.
 Qwen3-VL 상품 벡터가 상품의 95% 미만이면 Qwen 사진 검색은 오류를 내고 SigLIP + KURE로 폴백합니다
-(`search_qwen3_vl.MIN_COVERAGE`).
+(`shopmate.search.qwen.MIN_COVERAGE`).
 
 ## 5. 이벤트 워커
 
 서버와 별도 프로세스로 실행합니다. 여러 워커가 떠도 `FOR UPDATE SKIP LOCKED`로 같은 행을 잡지 않습니다.
 
 ```bash
-python event_pipeline.py          # 계속 소비
-python event_pipeline.py --once   # 한 번만 비우기
+python -m shopmate.store.events          # 계속 소비
+python -m shopmate.store.events --once   # 한 번만 비우기
 ```
 
 실패 이벤트는 지수 백오프로 최대 8회 재시도한 뒤 `failed_at`에 격리합니다.

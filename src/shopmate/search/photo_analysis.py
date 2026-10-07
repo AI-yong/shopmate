@@ -13,11 +13,11 @@ from typing import Any
 import requests
 from PIL import Image
 
-import config
-import db_pg
-import image_query_service
-import session_db
-import visual_search_query
+from shopmate import config
+from shopmate.store import db
+from shopmate.search import photo_store
+from shopmate.store import session_state
+from shopmate.search import photo_query
 
 MAX_ITEMS = 8
 MAX_OCR = 12
@@ -38,7 +38,7 @@ ANALYSIS_SCHEMA_VERSION = 4
 _JSON_RE = re.compile(r"\{.*\}", re.S)
 
 
-class AmbiguousImageItems(image_query_service.ImageQueryError):
+class AmbiguousImageItems(photo_store.ImageQueryError):
     """사진 분석은 성공했지만 검색 대상을 하나로 정할 수 없음."""
 
 
@@ -58,7 +58,7 @@ bbox는 이미지 전체를 0~1000으로 정규화한 [x1,y1,x2,y2] 좌표입니
 @lru_cache(maxsize=1)
 def _catalog_values() -> tuple[list[str], list[str], list[str]]:
     """카테고리·색·소재 enum. 소재도 DB 폐쇄 목록이어야 필터로 이어질 수 있다."""
-    metadata = db_pg.read_catalog_metadata()
+    metadata = db.read_catalog_metadata()
     enums = metadata["enums"]
     return enums["category"], enums["color"], list(enums.get("material") or [])
 
@@ -208,7 +208,7 @@ def clean_analysis(raw: dict[str, Any]) -> dict[str, Any]:
             "confidence": _confidence(entry.get("confidence")),
             "attribute_source": "vlm_inferred",
         })
-        items[-1]["search_features_en"] = visual_search_query.clean_search_features(
+        items[-1]["search_features_en"] = photo_query.clean_search_features(
             items[-1], entry.get("search_features_en"))
     ocr = []
     for entry in (raw.get("ocr_text") or [])[:MAX_OCR]:
@@ -237,14 +237,14 @@ def load_search_item(user_id: str, analysis_id: str,
     try:
         analysis_id = str(uuid.UUID(analysis_id))
     except (TypeError, ValueError) as error:
-        raise image_query_service.ImageQueryError("올바른 분석 ID가 아닙니다.") from error
+        raise photo_store.ImageQueryError("올바른 분석 ID가 아닙니다.") from error
     if not re.fullmatch(r"item_[1-9][0-9]*", str(item_id or "")):
-        raise image_query_service.ImageQueryError("올바른 아이템 ID가 아닙니다.")
-    with session_db.connect() as connection:
-        record = session_db.load_image_analysis_item(
+        raise photo_store.ImageQueryError("올바른 아이템 ID가 아닙니다.")
+    with session_state.connect() as connection:
+        record = session_state.load_image_analysis_item(
             connection, analysis_id, item_id, user_id)
     if record is None:
-        raise image_query_service.ImageQueryError(
+        raise photo_store.ImageQueryError(
             "검색에 사용할 아이템이 없거나 분석이 만료됐습니다. 사진을 다시 분석해 주세요.")
     return record
 
@@ -254,11 +254,11 @@ def load_analysis(user_id: str, analysis_id: str) -> dict[str, Any]:
     try:
         analysis_id = str(uuid.UUID(analysis_id))
     except (TypeError, ValueError) as error:
-        raise image_query_service.ImageQueryError("올바른 분석 ID가 아닙니다.") from error
-    with session_db.connect() as connection:
-        record = session_db.load_image_analysis(connection, analysis_id, user_id)
+        raise photo_store.ImageQueryError("올바른 분석 ID가 아닙니다.") from error
+    with session_state.connect() as connection:
+        record = session_state.load_image_analysis(connection, analysis_id, user_id)
     if record is None:
-        raise image_query_service.ImageQueryError(
+        raise photo_store.ImageQueryError(
             "저장된 사진 분석이 없거나 만료됐습니다. 사진을 다시 올려 주세요.")
     return {**record, "source_query_image_id": record["query_image_id"],
             "analysis_cached": True}
@@ -271,15 +271,15 @@ def analysis_model_tag() -> str:
 
 def analyze(user_id: str, query_image_id: str) -> dict[str, Any]:
     """사진을 VLM으로 분석한다. 같은 사진·같은 모델·같은 계약의 살아 있는 분석이 있으면 다시 부르지 않는다."""
-    with session_db.connect() as connection:
-        cached = session_db.load_image_analysis_by_query(
+    with session_state.connect() as connection:
+        cached = session_state.load_image_analysis_by_query(
             connection, query_image_id, user_id, analysis_model_tag())
     if cached is not None:
         return {
             **cached, "source_query_image_id": query_image_id,
             "analysis_cached": True, "ocr_text": [], "brand_candidates": [],
         }
-    image = image_query_service.load_query_image(user_id, query_image_id)
+    image = photo_store.load_query_image(user_id, query_image_id)
     try:
         raw = _call_vlm(image)
     except requests.RequestException as error:
@@ -291,12 +291,12 @@ def analyze(user_id: str, query_image_id: str) -> dict[str, Any]:
         raise VLMAnalysisError(f"사진 분석 VLM 출력이 올바르지 않습니다: {error}") from error
     for index, item in enumerate(result["items"], 1):
         item["item_id"] = f"item_{index}"
-    with session_db.connect() as connection:
-        analysis_id = session_db.save_image_analysis(
+    with session_state.connect() as connection:
+        analysis_id = session_state.save_image_analysis(
             connection, query_image_id, user_id, result["items"],
             analysis_model_tag())
     if analysis_id is None:
-        raise image_query_service.ImageQueryError(
+        raise photo_store.ImageQueryError(
             "원본 이미지가 만료되어 분석 결과를 저장하지 못했습니다.")
     result.update({
         "analysis_id": analysis_id,
@@ -348,7 +348,7 @@ def choose_search_item(result: dict[str, Any], category: str | None = None,
     if len(items) == 1:
         return items[0]
     if not items:
-        raise image_query_service.ImageQueryError(
+        raise photo_store.ImageQueryError(
             "사진에서 검색할 패션 아이템을 찾지 못했습니다.")
     chosen = dominant_item(items)
     if chosen is not None:
@@ -404,7 +404,7 @@ def resolve_search_item(user_id: str, query_image_id: str, *,
         if analysis_id:
             try:
                 analysis = load_analysis(user_id, analysis_id)
-            except image_query_service.ImageQueryError:
+            except photo_store.ImageQueryError:
                 # 검증 블록의 분석이 만료됐거나 다른 사진의 것이면 다시 분석한다.
                 analysis = None
         if analysis is None:
@@ -430,7 +430,7 @@ def resolve_search_item(user_id: str, query_image_id: str, *,
     except AmbiguousImageItems as error:
         outcome.update(ambiguous=True, warning=str(error))
         return outcome
-    except image_query_service.ImageQueryError as error:
+    except photo_store.ImageQueryError as error:
         outcome["warning"] = str(error)
         return outcome
     outcome.update(item=chosen, others=other_items(analysis, chosen))
@@ -455,6 +455,6 @@ def search_query_image(user_id: str, resolved: dict[str, Any],
     area = round(_area(item) / 1_000_000, 4)
     if area < CROP_MIN_AREA:
         return {"query_image_id": source, "cropped": False, "area": area}
-    image = image_query_service.load_query_image(user_id, source)
-    stored = image_query_service.store_pil_query(user_id, _crop(image, box, CROP_PADDING))
+    image = photo_store.load_query_image(user_id, source)
+    stored = photo_store.store_pil_query(user_id, _crop(image, box, CROP_PADDING))
     return {"query_image_id": stored["query_image_id"], "cropped": True, "area": area}

@@ -2,9 +2,9 @@
 
     사진만      → Qwen3-VL 이미지 질의 벡터
     사진 + 글   → Qwen3-VL fused 질의 벡터(사진 + Gemma가 만든 영어 검색문 retrieval_query_en)
-    Qwen 실패   → 호출자가 기존 SigLIP+KURE RRF(multimodal_search)로 폴백
+    Qwen 실패   → 호출자가 기존 SigLIP+KURE RRF(fallback)로 폴백
 
-글만 있는 검색은 이 모듈을 거치지 않는다(KURE, store_pg.search_semantic_result).
+글만 있는 검색은 이 모듈을 거치지 않는다(KURE, shop.search_semantic_result).
 상품 쪽은 Qwen 문서 벡터 한 벌(config.QWEN3_VL_RECIPE, 기본 사진 + search_text)을 두 질의 경로가 공유한다.
 필터는 호출자가 filter_resolution으로 판정한 하드 필터만 받는다. 사진 추정값(soft)은 이 경로에서 쓰지 않는다 —
 사진 자체가 질의 벡터에 들어가기 때문이다.
@@ -15,14 +15,14 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-import config
+from shopmate import config
 
 # (표시 이름, 서비스 모듈, ranking 값). config.MULTIMODAL_BACKEND가 rrf면 통합 경로를 쓰지 않는다.
-QWEN_BACKEND = ("Qwen3-VL", "qwen3_vl_query_service", "qwen3_vl_fused_image_text")
+QWEN_BACKEND = ("Qwen3-VL", "qwen", "qwen3_vl_fused_image_text")
 
 
 class BackendUnavailable(RuntimeError):
-    """통합 임베딩 경로를 쓸 수 없다. 호출자는 기존 SigLIP+KURE RRF(multimodal_search)로 폴백한다.
+    """통합 임베딩 경로를 쓸 수 없다. 호출자는 기존 SigLIP+KURE RRF(fallback)로 폴백한다.
 
     str()은 모델에게 넘길 짧은 문장이다(토큰·내부 정보 최소화). 원인 전문은 detail에 있다.
     """
@@ -52,8 +52,8 @@ def search_by_image(user_id: str, query_image_id: str, text: str | None = None, 
     text = " ".join(str(text or "").split()) or None
     hard = {key: value for key, value in (filters or {}).items() if value is not None}
     try:
-        import qwen3_vl_query_service
-        rows = qwen3_vl_query_service.find_similar(user_id, query_image_id, text, limit=limit, **hard)
+        from shopmate.search import qwen
+        rows = qwen.find_similar(user_id, query_image_id, text, limit=limit, **hard)
     except Exception as error:  # noqa: BLE001 — 어떤 실패든 폴백 사유로 돌려준다
         unavailable = BackendUnavailable(label, error)
         print(f"[검색] {unavailable} SigLIP+KURE RRF로 폴백 — {unavailable.detail}", file=sys.stderr)

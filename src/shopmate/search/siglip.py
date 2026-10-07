@@ -1,7 +1,7 @@
 """SigLIP 2 이미지 검색. Qwen3-VL 사진 검색이 실패했을 때 쓰는 폴백 경로다.
 
 업로드 사진을 SigLIP 2 이미지 벡터로 바꿔, SQL 조건으로 좁힌 상품 사진 벡터와 비교한다.
-KURE 상품 설명 검색과는 순위로만 합친다(multimodal_search.py).
+KURE 상품 설명 검색과는 순위로만 합친다(search/fallback.py).
 """
 
 from __future__ import annotations
@@ -15,9 +15,18 @@ from pgvector.psycopg import register_vector
 from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
-import config
-import db_pg
-from qwen3_vl_embedding import choose_device
+from shopmate import config
+from shopmate.store import db
+
+def choose_device(requested: str) -> str:
+    if requested != "auto":
+        return requested
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
 
 DEFAULT_MODEL = config.SIGLIP_MODEL_NAME
 DEFAULT_REVISION = config.SIGLIP_MODEL_REVISION
@@ -89,7 +98,7 @@ def search(dsn: str, vector: Any, limit: int,
         raise ValueError(f"지원하지 않는 대분류입니다: {group}")
     # 텍스트·이미지 검색이 서로 다른 조건을 쓰지 않도록 일반 상품 검색과 같은
     # SQL 필터 계약을 재사용한다. 선필터 뒤에만 벡터 거리를 계산한다.
-    product_where, product_parameters = db_pg._product_filter_where(
+    product_where, product_parameters = db._product_filter_where(
         group=group, category=category, gender=gender, brand=brand,
         min_price=min_price, max_price=max_price, color=color, size=size,
         material=material, machine_washable=machine_washable,

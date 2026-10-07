@@ -1,7 +1,7 @@
 """LLM 이 호출할 Tool 계층.
 
 TOOLS(모델이 읽는 스키마), validate_call(실행 직전 인자 검증), Toolbox(실행기)로 이루어진다.
-Toolbox 메서드는 얇게 둔다. 취소·반품 가능 여부 같은 정책 판단은 store_pg.Store 한 곳에서 하고,
+Toolbox 메서드는 얇게 둔다. 취소·반품 가능 여부 같은 정책 판단은 shop.Store 한 곳에서 하고,
 여기서는 그 결과를 ok()/fail() 모양으로 옮긴다. 판단이 두 곳에 있으면 can_cancel 과
 cancel_order 의 판단이 갈라진다.
 
@@ -15,10 +15,10 @@ import sys
 import traceback
 import uuid
 
-import config
-import db_pg as db
-import retrieval
-from store_pg import Store
+from shopmate import config
+from shopmate.store import db
+from shopmate.search import routing
+from shopmate.store.shop import Store
 
 # Tool enum의 단일 출처는 PostgreSQL 카탈로그(shop)입니다. 서버 시작 시 현재 DB 값을 읽어
 # 모델과 검색기가 같은 값 집합을 사용하게 합니다.
@@ -77,7 +77,7 @@ def fill_category_from_user(name, arguments, texts):
 
     "15만원 이하 남성 검은색 운동화 … 270 사이즈로 담아줘"에서 모델이 category 를 빼는 일이 반복됐다
     (size 가 신발을 뜻한다고 보고 생략). 필수 조건 확인이 인자만 보면 "운동화"라고 말한 사용자에게
-    종류를 되묻는다. texts 는 최근 발화가 먼저다(filter_resolution.user_turns). 품목이 나온 가장
+    종류를 되묻는다. texts 는 최근 발화가 먼저다(filter_rules.user_turns). 품목이 나온 가장
     최근 문장 하나만 보고, 그 문장에 품목이 정확히 하나일 때만 채운다.
     """
     if name != "search_product" or arguments.get("category") or arguments.get("product_name"):
@@ -131,7 +131,7 @@ def size_schema(description):
     }
 
 
-# 긍정 필터와 짝을 이루는 제외 필터 축. filter_resolution.REFERENCE_AXES 와 같다.
+# 긍정 필터와 짝을 이루는 제외 필터 축. filter_rules.REFERENCE_AXES 와 같다.
 EXCLUDABLE_AXES = ("category", "color", "material")
 
 
@@ -1409,16 +1409,16 @@ class Toolbox:
         }, message + exclusion_note)
 
     def _resolve_filters(self, arguments, quotes=None):
-        """사용자가 말한 값만 하드 필터로 남긴다. 판정 규칙은 filter_resolution 한 곳에 있다.
+        """사용자가 말한 값만 하드 필터로 남긴다. 판정 규칙은 filter_rules 한 곳에 있다.
 
         검증 블록에 "니트 / 초록색" 요약이 보이면 모델은 color=초록색을 넣고 싶어진다.
         그 값이 하드 필터로 들어가면 VLM이 틀렸을 때 SigLIP 결과까지 함께 잘린다.
         근거가 없는 값은 완화 가능한 기준 필터로, 사용자가 부정한 값은 버린다.
         원문(user_texts)이 비어 있으면 아무것도 바꾸지 않는다.
         """
-        import filter_resolution
+        from shopmate.search import filter_rules
 
-        return filter_resolution.resolve(arguments, user_texts=self.user_texts, quotes=quotes)
+        return filter_rules.resolve(arguments, user_texts=self.user_texts, quotes=quotes)
 
     def _move_negated_to_excluded(self, conditions, excluded):
         """원문에서 부정된 category·color·material을 긍정 필터에서 제외 필터로 옮긴다.
@@ -1444,10 +1444,10 @@ class Toolbox:
             size=None, material=None, machine_washable=None, in_stock=None,
             user_quotes=None, exclude_category=None, exclude_color=None,
             exclude_material=None):
-        """사진 검색 단일 도구. 경로 선택·폴백은 retrieval 모듈이 정한다(기본 Qwen3-VL fused).
+        """사진 검색 단일 도구. 경로 선택·폴백은 routing 모듈이 정한다(기본 Qwen3-VL fused).
 
         1) semantic_query에서 '비슷한' 같은 연산자 표현을 걷어낸다.
-        2) category/material/color는 user_quotes와 원문으로 판정한다(filter_resolution).
+        2) category/material/color는 user_quotes와 원문으로 판정한다(filter_rules).
            사용자가 말한 값은 하드 필터, 근거 없는 값은 기준 필터, 부정한 값은 제외 필터
            (exclude_*)다. 모델이 exclude_*로 직접 넘긴 값도 같은 제외 필터가 된다.
            두 경로(통합 임베딩·RRF 폴백) 모두 같은 판정 결과를 쓴다.
@@ -1455,13 +1455,12 @@ class Toolbox:
            VLM이 죽어도 SigLIP+텍스트로 계속한다.
         4) 기준 사진의 종류(기본) 안에서 찾고, 결과가 모자라면 서버가 필터를 푼다.
         """
-        import image_query_service
-        import multimodal_query
-        import multimodal_search
-        import shopping_image_analysis
-        import visual_search_query
+        from shopmate.search import photo_store
+        from shopmate.search import fallback
+        from shopmate.search import photo_analysis
+        from shopmate.search import photo_query
 
-        semantic_query, _ = multimodal_query.strip_similarity_operators(semantic_query)
+        semantic_query, _ = fallback.strip_similarity_operators(semantic_query)
         # search_product 와 같이 브랜드 표기("나이키", "nike")를 DB 표기로 맞춘다.
         requested_brand = brand
         if brand is not None:
@@ -1489,7 +1488,7 @@ class Toolbox:
         soft_filters = dict(demoted)
         fallback_warning = None
         try:
-            resolved = shopping_image_analysis.resolve_search_item(
+            resolved = photo_analysis.resolve_search_item(
                 self.store.user_id, query_image_id, analysis_id=analysis_id,
                 item_id=item_id, category=hard.get("category"),
                 group_categories=(None if hard.get("category") else
@@ -1514,18 +1513,18 @@ class Toolbox:
             visual_item = resolved["item"]
             visual_source = ("vlm_inferred" if visual_item
                              else "unavailable" if resolved["warning"] else None)
-            backend = retrieval.multimodal_backend()
+            backend = routing.multimodal_backend()
             if backend is not None:
                 if not retrieval_query_en or not retrieval_query_en.strip():
                     return fail(
                         f"{backend[0]} 사진 검색에는 사용자의 시각 의도를 보존한 영어 검색문이 필요합니다. "
                         "retrieval_query_en을 만들어 다시 호출해 주세요.")
                 # 아이템이 정해졌으면 서버가 크롭 여부를 정한다(면적 CROP_MIN_AREA 이상만).
-                query_image = shopping_image_analysis.search_query_image(
+                query_image = photo_analysis.search_query_image(
                     self.store.user_id, resolved, query_image_id)
                 # 사용자가 품목을 말하지 않았으면 사진 아이템의 대분류로 거르고 종류 이름을 검색문에 붙인다.
                 photo_group = photo_item_group(visual_item, hard)
-                search_query = visual_search_query.build_search_query(
+                search_query = photo_query.build_search_query(
                     retrieval_query_en, visual_item, reference_attributes,
                     name_item=bool(photo_group))
                 filters = {**hard, **exclude_filters}
@@ -1535,17 +1534,17 @@ class Toolbox:
                 try:
                     # 사용자가 말한 색·소재도 SQL 하드 필터다. 사진 추정값(soft)은 이 경로에서
                     # 쓰지 않고 응답에만 남긴다 — 사진 자체가 질의 벡터에 들어가기 때문이다.
-                    found = retrieval.search_by_image(
+                    found = routing.search_by_image(
                         self.store.user_id, query_image["query_image_id"], search_query["query_text"],
                         filters=filters, limit=MAX_SEARCH_RESULTS)
                     if photo_group and not found["products"]:
                         # 사용자가 말한 조건과 겹쳐 0건이면 사진에서 온 대분류만 푼다.
                         filters.pop("group")
                         photo_group_relaxed = True
-                        found = retrieval.search_by_image(
+                        found = routing.search_by_image(
                             self.store.user_id, query_image["query_image_id"],
                             search_query["query_text"], filters=filters, limit=MAX_SEARCH_RESULTS)
-                except retrieval.BackendUnavailable as error:
+                except routing.BackendUnavailable as error:
                     fallback_warning = f"{error} 기존 검색으로 전환했습니다."   # 짧은 문장만(원인은 서버 로그)
                 else:
                     # 모델에게 돌려줄 결과는 필요한 필드만. 저장소 키는 토큰만 늘린다.
@@ -1556,7 +1555,7 @@ class Toolbox:
                         row["brand"] = _brand(row["brand"])
                     products = self.store.in_stock_first(
                         self._with_options(products), key="product_id")
-                    summary = shopping_image_analysis.summarize_item(visual_item)
+                    summary = photo_analysis.summarize_item(visual_item)
                     notes = []
                     if photo_group and not photo_group_relaxed:
                         notes.append(f"사진의 {visual_item.get('category')} 기준으로 {photo_group} 안에서 찾았습니다.")
@@ -1595,13 +1594,13 @@ class Toolbox:
                     }, " ".join([
                         f"사진과 시각 검색문을 함께 반영한 상품 {len(products)}개를 찾았습니다.",
                         *notes]))
-            result = multimodal_search.search(
+            result = fallback.search(
                 self.store, self.store.user_id, query_image_id, semantic_query,
-                visual_item=visual_search_query.item_for_fallback(visual_item, reference_attributes),
+                visual_item=photo_query.item_for_fallback(visual_item, reference_attributes),
                 visual_source=visual_source,
                 soft_filters=soft_filters, limit=MAX_SEARCH_RESULTS,
                 **hard, **exclude_filters)
-        except (ValueError, image_query_service.ImageQueryError) as error:
+        except (ValueError, photo_store.ImageQueryError) as error:
             return fail(str(error))
 
         products = [{
@@ -1613,7 +1612,7 @@ class Toolbox:
 
         # --- 메시지: 무엇을 보고, 무엇을 기준으로, 무엇을 못 했는지 한 줄씩 ---
         notes = []
-        summary = shopping_image_analysis.summarize_item(visual_item)
+        summary = photo_analysis.summarize_item(visual_item)
         if summary:
             notes.append(f"사진 이해: {summary}.")
         reference = result["reference_filters"]

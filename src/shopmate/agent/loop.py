@@ -4,7 +4,7 @@
 
     모델은 Tool 을 실행하지 않는다.
 
-젬마는 글자만 만드는 프로그램이다. 우리 파일을 열지도, store_pg.py 를 부르지도 못한다.
+젬마는 글자만 만드는 프로그램이다. 우리 파일을 열지도, store/shop.py 를 부르지도 못한다.
 실제로 일어나는 일은 이렇다.
 
     1. 이 파일이 모델에게 "대화 내용 + 쓸 수 있는 Tool 목록" 을 보낸다
@@ -24,11 +24,10 @@ import time
 
 import requests
 
-import agency
-import config
-import filter_resolution
-from tools_pg import (GENDER_EVIDENCE, MODEL_TOOLS, Toolbox, categories_in_text, normalize_size,
-                      search_clarification, validate_call, fill_category_from_user)
+from shopmate.agent import verifier
+from shopmate import config
+from shopmate.search import filter_rules
+from shopmate.agent.tools import GENDER_EVIDENCE, MODEL_TOOLS, Toolbox, categories_in_text, normalize_size, search_clarification, validate_call, fill_category_from_user
 
 
 # ======================================================================
@@ -436,7 +435,7 @@ _ITEM_NUMBER = re.compile(r"\s*(\d{1,2})\s*(?:번째|번)?\s*(?:이요|요|으�
 def _photo_answers(current, history):
     """사진을 올린 턴부터 지금까지 (사용자 말, 바로 앞 모델 답) 목록. 최근 것이 먼저다.
 
-    filter_resolution.user_turns 와 같이 앱 메시지는 건너뛰고 사진 턴에서 멈춘다.
+    filter_rules.user_turns 와 같이 앱 메시지는 건너뛰고 사진 턴에서 멈춘다.
     """
     messages = [message if isinstance(message, dict) else {}
                 for message in [*(history or []), {"role": "user", "content": current}]]
@@ -1001,7 +1000,7 @@ class ShoppingAgent:
         self._resuming = False
 
         # 사용자가 명시적으로 장기 기억을 요청한 선호만 저장한다.
-        self.preferences = agency.PreferenceMemory()
+        self.preferences = verifier.PreferenceMemory()
 
     # ------------------------------------------------------------------
     # 프롬프트 조립
@@ -1457,15 +1456,15 @@ class ShoppingAgent:
         """
         try:
             message = call_model(
-                agency.verifier_messages(user_message, draft, trace, self._state_block(),
+                verifier.verifier_messages(user_message, draft, trace, self._state_block(),
                                          about_to_confirm=about_to_confirm,
                                          recent_turns=self.toolbox.user_texts),
-                tools=[agency.VERIFY_TOOL],
+                tools=[verifier.VERIFY_TOOL],
             )
             calls = parse_tool_calls(message)
             if len(calls) != 1 or calls[0].name != "verify_outcome" or calls[0].error:
                 return None
-            decision = agency.validate_verdict(calls[0].arguments)
+            decision = verifier.validate_verdict(calls[0].arguments)
             if decision is None:
                 return None
             trace.append({
@@ -1889,7 +1888,7 @@ class ShoppingAgent:
         self.last_orders = state.get("last_orders") or None
         self.photos = list(state.get("photos") or [])
         self.last_photo_gender = state.get("last_photo_gender")
-        self.preferences = agency.PreferenceMemory.from_dict(state.get("preferences"))
+        self.preferences = verifier.PreferenceMemory.from_dict(state.get("preferences"))
 
     def model_request_parts(self, image_tools=True):
         """메인 모델 호출의 (시스템 프롬프트, 도구 목록).
@@ -1901,10 +1900,10 @@ class ShoppingAgent:
         tools = [tool for tool in MODEL_TOOLS
                  if image_tools or tool["function"]["name"] not in IMAGE_TOOLS]
         if config.ADAPTIVE_AGENT_MODE:
-            system_prompt += agency.ADAPTIVE_PROMPT
+            system_prompt += verifier.ADAPTIVE_PROMPT
         if config.USER_MEMORY_ENABLED:
-            system_prompt += agency.MEMORY_PROMPT
-            tools.append(agency.MEMORY_TOOL)
+            system_prompt += verifier.MEMORY_PROMPT
+            tools.append(verifier.MEMORY_TOOL)
         return system_prompt, tools
 
     def _substituted_size(self, arguments, trace):
@@ -1942,7 +1941,7 @@ class ShoppingAgent:
     def _photo_gender(self, call, cleaned):
         """새 사진 검색의 성별은 이번 사진 이후 사용자 말(또는 저장된 선호)에 근거가 있을 때만 쓴다.
 
-        색·품목·소재는 filter_resolution 이 근거를 보지만 성별은 보지 않았다. GLM 이 두 번째 사진에서
+        색·품목·소재는 filter_rules 이 근거를 보지만 성별은 보지 않았다. GLM 이 두 번째 사진에서
         첫 사진의 "남성용"을 묻지 않고 그대로 썼다(2026-10-06). 근거 없이 넘어온 성별은 빼서 앱이 다시
         묻게 하고, 그 값을 "이번에도 ○○으로 찾을까요?" 제안으로 돌려준다. 사용자가 그 제안에 "응"이라고
         하면 그 성별로 채운다. 반환: (검사용 인자, 제안할 성별).
@@ -1988,12 +1987,12 @@ class ShoppingAgent:
         items = context.get("items")
         if not items:
             # 모델이 검증 블록의 "아이템 N개"만 보고 직접 물었으면 검색 실패 기록이 없다.
-            import image_query_service
-            import shopping_image_analysis
+            from shopmate.search import photo_store
+            from shopmate.search import photo_analysis
             try:
-                items = shopping_image_analysis.load_analysis(
+                items = photo_analysis.load_analysis(
                     self.toolbox.store.user_id, analysis_id).get("items")
-            except image_query_service.ImageQueryError:
+            except photo_store.ImageQueryError:
                 return arguments
         if not items or len(items) < 2:
             return arguments
@@ -2023,7 +2022,7 @@ class ShoppingAgent:
         # 거기 적힌 VLM 추정값("초록색")이 사용자 말로 오인되면 하드 필터 보호가 무력화된다.
         self.toolbox.user_text = user_message.split(_PHOTO_NOTE, 1)[0]
         # 이전 턴에 말한 조건("검은 니트" → 다음 턴 "좀 더 싼 걸로")도 사용자가 말한 것이다.
-        self.toolbox.user_texts = filter_resolution.user_turns(user_message, history)
+        self.toolbox.user_texts = filter_rules.user_turns(user_message, history)
         self.photo_answers = _photo_answers(user_message, history)
         failed_signatures = set()
         completed_mutations = set()

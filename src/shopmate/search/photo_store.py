@@ -11,9 +11,9 @@ from typing import Any
 from minio import Minio
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-import config
-import session_db
-from search_siglip import DEFAULT_MODEL, DEFAULT_REVISION, get_query_encoder, search
+from shopmate import config
+from shopmate.store import session_state
+from shopmate.search.siglip import DEFAULT_MODEL, DEFAULT_REVISION, get_query_encoder, search
 
 ALLOWED_TYPES = {
     "image/jpeg": {"JPEG"},
@@ -89,8 +89,8 @@ def store_query(user_id: str, raw: bytes, content_type: str) -> dict[str, Any]:
     client.put_object(config.MINIO_BUCKET, key, io.BytesIO(normalized), len(normalized),
                       content_type=OUTPUT_TYPE)
     try:
-        with session_db.connect() as connection:
-            session_db.save_image_query(
+        with session_state.connect() as connection:
+            session_state.save_image_query(
                 connection, query_id, user_id, config.MINIO_BUCKET, key, digest,
                 width, height, config.IMAGE_QUERY_TTL_SECONDS)
     except Exception:
@@ -131,8 +131,8 @@ def get_query_record(user_id: str, query_id: str) -> dict[str, Any]:
         parsed = str(uuid.UUID(query_id))
     except (ValueError, TypeError) as error:
         raise ImageQueryError("올바른 이미지 ID가 아닙니다.") from error
-    with session_db.connect() as connection:
-        record = session_db.load_image_query(connection, parsed, user_id)
+    with session_state.connect() as connection:
+        record = session_state.load_image_query(connection, parsed, user_id)
     if record is None:
         raise ImageQueryError("이미지가 없거나 만료됐습니다. 다시 업로드해 주세요.")
     return record
@@ -162,12 +162,12 @@ def _remove_objects(rows) -> int:
 
 
 def purge_expired() -> int:
-    with session_db.connect() as connection:
-        rows = session_db.delete_expired_image_queries(connection)
+    with session_state.connect() as connection:
+        rows = session_state.delete_expired_image_queries(connection)
     return _remove_objects(rows)
 
 
 def delete_user_queries(user_id: str) -> int:
-    with session_db.connect() as connection:
-        rows = session_db.delete_user_image_queries(connection, user_id)
+    with session_state.connect() as connection:
+        rows = session_state.delete_user_image_queries(connection, user_id)
     return _remove_objects(rows)

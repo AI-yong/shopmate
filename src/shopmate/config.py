@@ -14,7 +14,10 @@ import os
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+# 저장소 루트. .env 와 web/ 이 여기 있다. 소스에서 실행(pip install -e .)하면 src/shopmate 의
+# 두 단계 위이고, 일반 설치로 site-packages 에서 돌면 실행한 폴더를 루트로 본다.
+_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = _SOURCE_ROOT if (_SOURCE_ROOT / "pyproject.toml").exists() else Path.cwd()
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
@@ -72,7 +75,7 @@ SESSION_DSN = os.environ.get("SESSION_DSN",
 APP_SHOP_DSN = os.environ.get("APP_SHOP_DSN") or SHOP_DSN
 APP_SESSION_DSN = os.environ.get("APP_SESSION_DSN") or SESSION_DSN
 
-# 세션 쿠키. 값은 랜덤 토큰이고 DB 에는 해시만 있다 (db_pg.create_web_session).
+# 세션 쿠키. 값은 랜덤 토큰이고 DB 에는 해시만 있다 (db.create_web_session).
 SESSION_MAX_AGE_SECONDS = int(os.environ.get("SESSION_MAX_AGE_SECONDS", str(30 * 24 * 3600)))
 # HTTPS 로 서비스하면 1. 지금처럼 http 로 LAN 에서 열면 0 이어야 브라우저가 쿠키를 보낸다.
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "0").strip().lower() in (

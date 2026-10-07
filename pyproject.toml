@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shopmate"
+version = "0.1.0"
+description = "한국어 멀티모달 쇼핑 에이전트 — 대화·사진 검색, 승인 기반 주문"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32,<3",
+    "starlette>=0.37,<1",
+    "uvicorn>=0.30,<1",
+    "numpy>=1.26,<3",
+    "sentence-transformers>=6,<7",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.4",
+    "Pillow>=12,<13",
+    "minio>=7.2,<8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -18,7 +18,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-import config
+from shopmate import config
 
 
 def _uuid(value: str | uuid.UUID | None = None) -> uuid.UUID:

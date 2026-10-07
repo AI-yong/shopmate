@@ -58,7 +58,6 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import date
-from pathlib import Path
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -68,19 +67,18 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-import agency
-import config
-import db_pg as db
-import event_pipeline
-import image_query_service
-import session_db
-import shopping_image_analysis
-from agent import ShoppingAgent, tool_history_messages
-from store_pg import Store
-from tools_pg import MAX_SEARCH_RESULTS
+from shopmate.agent import verifier
+from shopmate import config
+from shopmate.store import db
+from shopmate.store import events
+from shopmate.search import photo_store
+from shopmate.store import session_state
+from shopmate.search import photo_analysis
+from shopmate.agent.loop import ShoppingAgent, tool_history_messages
+from shopmate.store.shop import Store
+from shopmate.agent.tools import MAX_SEARCH_RESULTS
 
-ROOT = Path(__file__).resolve().parent
-WEB_DIR = ROOT / "web"
+WEB_DIR = config.PROJECT_ROOT / "web"
 
 # 업무 DB 의 접속 문자열 (웹 서버 전용 최소 권한 계정).
 DSN = config.APP_SHOP_DSN
@@ -127,7 +125,7 @@ class Session:
         if entries is None:
             self._saved_preferences = None
             return
-        self.agent.preferences = agency.PreferenceMemory(entries)
+        self.agent.preferences = verifier.PreferenceMemory(entries)
         self._saved_preferences = self.agent.preferences.to_dict()
 
     def save(self):
@@ -170,8 +168,8 @@ class Session:
 # 숨기는 것이 데이터를 잃는 것보다 나쁘기 때문입니다.
 def _session_state(action, user_id, *args):
     try:
-        with session_db.connect() as conn:
-            return getattr(session_db, action)(conn, user_id, *args)
+        with session_state.connect() as conn:
+            return getattr(session_state, action)(conn, user_id, *args)
     except Exception as problem:
         print(f"[세션 DB] {action}({user_id}) 실패: {problem}")
         return None
@@ -355,11 +353,11 @@ def purge_expired_once():
     """
     session_ok = True
     try:
-        with session_db.connect() as conn:
-            cleared, idle = session_db.purge_expired(conn)
+        with session_state.connect() as conn:
+            cleared, idle = session_state.purge_expired(conn)
         if cleared or idle:
             print(f"[청소] 만료된 확인 대기 {cleared}건 · 오래된 대화 상태 {idle}건")
-        images = image_query_service.purge_expired()
+        images = photo_store.purge_expired()
         if images:
             print(f"[청소] 만료된 이미지 질의 {images}건")
     except Exception as problem:
@@ -615,12 +613,12 @@ def trace_json(trace):
         }
         # 실패에도 종류가 있다. 사용자에게 물어야 하는 것(needs_input: 성별·사진 속 품목·사이즈)이나
         # 결과 없음(no_match)·규칙상 불가(blocked)는 오류가 아니다. 화면이 이를 "실패" 로 세지 않도록
-        # tools_pg.fail() 의 status 를 함께 보낸다.
+        # tools.fail() 의 status 를 함께 보낸다.
         if not row["ok"]:
             row["status"] = result.get("status") or "failed"
         # 사진 검색은 무엇을 봤고, 무엇을 기준으로, 어떤 질의로 찾았는지를 화면에 보이도록
         # query plan 요약을 함께 보낸다. 다른 툴은 이 키가 없다.
-        # 경로가 둘이라 모양도 둘이다 (tools_pg.search_by_image_and_text):
+        # 경로가 둘이라 모양도 둘이다 (tools.search_by_image_and_text):
         #   Qwen3-VL 통합 경로 → route·retrieval_query_en·hard_filters (query_plan 없음)
         #   SigLIP+KURE RRF    → query_plan (Qwen 이 실패했거나 설정이 rrf 일 때)
         plan = data.get("query_plan")
@@ -792,7 +790,7 @@ async def api_products(request):
         return outcome
     payload, rows, total_rows, semantic_pool = outcome
     lineage = await run_in_threadpool(
-        event_pipeline.record_impressions, DSN,
+        events.record_impressions, DSN,
         user_id=request.state.user_id,
         results=[{"product_id": p["id"]} for p in rows],
         source="product_search",
@@ -923,7 +921,7 @@ async def api_product(request):
     recommendation_id = request.headers.get("x-recommendation-id")
     try:
         await run_in_threadpool(
-            event_pipeline.record_interaction, DSN,
+            events.record_interaction, DSN,
             event_type="product_view", user_id=request.state.user_id,
             product_id=product["id"], recommendation_id=recommendation_id,
             source="product_detail")
@@ -1092,14 +1090,14 @@ def _preanalyze_image(user_id, query_image_id):
     """
     import requests
     try:
-        analysis = shopping_image_analysis.analyze(user_id, query_image_id)
-    except (shopping_image_analysis.VLMAnalysisError, requests.RequestException,
-            image_query_service.ImageQueryError) as error:
+        analysis = photo_analysis.analyze(user_id, query_image_id)
+    except (photo_analysis.VLMAnalysisError, requests.RequestException,
+            photo_store.ImageQueryError) as error:
         return [f"사진 분석 실패: {type(error).__name__}. analysis_id 없이 검색한다."]
     items = analysis.get("items") or []
     described = []
     for item in items[:4]:
-        summary = shopping_image_analysis.summarize_item(item) or "종류 미상"
+        summary = photo_analysis.summarize_item(item) or "종류 미상"
         caption = (item.get("visual_description") or "").strip()
         if caption:
             summary += f' "{caption[:80]}"'
@@ -1133,9 +1131,9 @@ async def api_chat(request):
     if query_image_id is not None:
         try:
             record = await run_in_threadpool(
-                image_query_service.get_query_record,
+                photo_store.get_query_record,
                 request.state.user_id, query_image_id)
-        except image_query_service.ImageQueryError as error:
+        except photo_store.ImageQueryError as error:
             return JSONResponse({"error": str(error)}, status_code=404)
         # 사진은 에이전트가 툴을 고르기 전에 서버가 먼저 이해한다(같은 사진은 캐시).
         # 그래야 어떤 툴을 고르든 VLM은 정확히 한 번 돌고, 모델은 사진 내용을 알고
@@ -1145,9 +1143,9 @@ async def api_chat(request):
         # 툴 선택과 retrieval_query_en 생성도 실제 픽셀을 근거로 하게 한다. 분석 요약은
         # 캐시/아이템 선택용이며, 메인 Gemma가 사진을 봤다고 가장하지 않는다.
         agent_image = await run_in_threadpool(
-            image_query_service.load_query_image,
+            photo_store.load_query_image,
             request.state.user_id, record["query_id"])
-        agent_image_data_url = shopping_image_analysis.data_url(agent_image)
+        agent_image_data_url = photo_analysis.data_url(agent_image)
         # UUID는 세션 DB에서 소유권·만료를 확인한 사실이다. 사용자가 쓴 자연어와
         # 구분해 모델이 이미지 속 텍스트나 임의 ID를 명령으로 해석하지 않게 한다.
         agent_message = (
@@ -1333,15 +1331,15 @@ async def _read_upload(request):
         try:
             declared_size = int(declared)
         except ValueError as error:
-            raise image_query_service.ImageQueryError(
+            raise photo_store.ImageQueryError(
                 "Content-Length가 올바르지 않습니다.") from error
         if declared_size > config.IMAGE_QUERY_MAX_BYTES:
-            raise image_query_service.ImageQueryError("업로드 이미지가 너무 큽니다.")
+            raise photo_store.ImageQueryError("업로드 이미지가 너무 큽니다.")
     data = bytearray()
     async for chunk in request.stream():
         data.extend(chunk)
         if len(data) > config.IMAGE_QUERY_MAX_BYTES:
-            raise image_query_service.ImageQueryError("업로드 이미지가 너무 큽니다.")
+            raise photo_store.ImageQueryError("업로드 이미지가 너무 큽니다.")
     return bytes(data)
 
 
@@ -1350,10 +1348,10 @@ async def api_image_upload(request):
     try:
         raw = await _read_upload(request)
         result = await run_in_threadpool(
-            image_query_service.store_query, request.state.user_id, raw,
+            photo_store.store_query, request.state.user_id, raw,
             request.headers.get("content-type", ""))
         return JSONResponse(result, status_code=201)
-    except image_query_service.ImageQueryError as error:
+    except photo_store.ImageQueryError as error:
         return JSONResponse({"error": str(error)}, status_code=400)
     except Exception as error:
         return JSONResponse(
@@ -1390,7 +1388,7 @@ _MEDIA_PUBLIC_PREFIX = "products/"        # 이 아래만 공개. query-images/ 
 
 def _read_media(bucket, key):
     from minio.error import S3Error
-    client = image_query_service.minio_client()
+    client = photo_store.minio_client()
     try:
         response = client.get_object(bucket, key)
         try:
@@ -1519,7 +1517,7 @@ async def api_reset(request):
             # 안 지우면 되돌린 뒤에도 "아까 그거 담을까요?" 가 살아남는다.
             _session_state_delete(session.user_id)
             try:
-                image_query_service.delete_user_queries(session.user_id)
+                photo_store.delete_user_queries(session.user_id)
             except Exception as problem:
                 print(f"[이미지 질의] 사용자 초기화 정리 실패: {problem}")
             session.close()

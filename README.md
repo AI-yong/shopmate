@@ -11,15 +11,31 @@ LLM은 정해진 Tool만 호출하고, 결제처럼 되돌릴 수 없는 작업�
 ## 구조
 
 ```
-web/ (ES 모듈 화면)
-  │  /api/*
-server.py ── agent.py ── tools_pg.py ── store_pg.py ── db_pg.py ── PostgreSQL + pgvector (shop)
-  │            │  agency.py (결과 관찰·보완)
-  │            └─ OpenAI 호환 LLM 서버 (Tool 호출 · 사진 분석 VLM)
-  ├─ session_db.py ─────────────────────────────────────────────── PostgreSQL (session)
-  ├─ image_query_service.py ────────────────────────────────────── MinIO (상품·질의 이미지)
-  └─ retrieval.py ── qwen3_vl_query_service.py ─────────────────── Qwen3-VL 임베딩 서비스 (:8092)
-                 └─ multimodal_search.py (SigLIP + KURE RRF 폴백)
+src/shopmate/
+├─ server.py            HTTP API·세션·사진 업로드·승인 (web/ 화면도 함께 낸다)
+├─ config.py            .env 설정
+├─ agent/
+│  ├─ loop.py           모델 호출 반복, Tool 실행, 승인 대기·재개
+│  ├─ tools.py          LLM 에 노출하는 Tool 스키마·구현·인자 검증
+│  └─ verifier.py       결과를 요청과 대조해 안전한 누락만 보완
+├─ store/
+│  ├─ shop.py           쇼핑몰 규칙 — 재고·장바구니·결제·취소·반품
+│  ├─ db.py             업무 DB (PostgreSQL + pgvector)
+│  ├─ session_state.py  세션 DB (대화 상태·승인 대기)
+│  └─ events.py         transactional outbox 이벤트 워커
+└─ search/
+   ├─ routing.py        사진 검색 경로 선택과 폴백
+   ├─ filter_rules.py   사용자가 직접 말한 조건만 하드 필터로 남기는 판정
+   ├─ text_embedding.py 글 검색 임베딩 (KURE-v1)
+   ├─ photo_analysis.py 사진 분석(VLM)·아이템 선택·크롭
+   ├─ photo_store.py    질의 사진 검사·저장 (MinIO)
+   ├─ photo_query.py    사진 검색문 조립
+   ├─ qwen.py           Qwen3-VL 사진 검색 (임베딩 서비스 호출 + 벡터 검색)
+   ├─ siglip.py         SigLIP 2 사진 검색 (폴백)
+   └─ fallback.py       SigLIP + KURE 순위 결합(RRF) 폴백
+services/qwen3_vl/      Qwen3-VL 임베딩 서비스 (별도 가상환경, :8092)
+web/                    화면 (빌드 없는 ES 모듈)
+deploy/                 DB 스키마·권한·docker-compose
 ```
 
 | 저장소 | 담는 것 |
@@ -37,9 +53,9 @@ server.py ── agent.py ── tools_pg.py ── store_pg.py ── db_pg.py 
 | 사진 + 글 | 크롭한 사진 + 영어 검색문 → Qwen3-VL fused 벡터 → 같은 상품 벡터 |
 | Qwen 서비스 장애 | SigLIP 2 이미지 검색 + KURE 텍스트 검색을 RRF로 결합 |
 
-- 경로 선택과 폴백은 `retrieval.py` 한 곳에서 정합니다.
-- **사용자가 직접 말한 값만 하드 필터**가 됩니다(`filter_resolution.py`). 사진에서 VLM이 추정한 색·소재는 필터로 쓰지 않고 사진 벡터로 반영합니다. "검은색 말고"처럼 부정한 값은 제외 필터가 됩니다.
-- 사진에 아이템이 여러 개면 면적이 압도적인 아이템으로 진행하고, 비슷하면 사용자에게 고르게 합니다(`shopping_image_analysis.py`). 사용자가 품목을 말하지 않았으면 고른 아이템의 대분류(상의·하의…)로 후보를 제한하고, 0건이면 그 제한만 풉니다.
+- 경로 선택과 폴백은 `search/routing.py` 한 곳에서 정합니다.
+- **사용자가 직접 말한 값만 하드 필터**가 됩니다(`search/filter_rules.py`). 사진에서 VLM이 추정한 색·소재는 필터로 쓰지 않고 사진 벡터로 반영합니다. "검은색 말고"처럼 부정한 값은 제외 필터가 됩니다.
+- 사진에 아이템이 여러 개면 면적이 압도적인 아이템으로 진행하고, 비슷하면 사용자에게 고르게 합니다(`search/photo_analysis.py`). 사용자가 품목을 말하지 않았으면 고른 아이템의 대분류(상의·하의…)로 후보를 제한하고, 0건이면 그 제한만 풉니다.
 - 상품 쪽 벡터는 Qwen3-VL 문서 벡터 한 벌(사진 + 검색용 텍스트)을 세 경로가 공유합니다. 벡터가 상품의 95% 미만이면 Qwen 검색은 오류를 내고 폴백합니다.
 
 ## 요구 사항
@@ -54,7 +70,7 @@ server.py ── agent.py ── tools_pg.py ── store_pg.py ── db_pg.py 
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .
 cp .env.example .env        # DB·MinIO·모델 서버 주소를 채운다
 ```
 
@@ -65,21 +81,21 @@ Qwen3-VL 임베딩 서비스는 별도 환경에서 띄웁니다. 서비스가 �
 
 ```bash
 python3 -m venv .venv-qwen
-.venv-qwen/bin/pip install -r requirements-qwen3-vl.txt
-.venv-qwen/bin/python qwen3_vl_embedding_server.py --device auto
+.venv-qwen/bin/pip install -r services/qwen3_vl/requirements.txt
+.venv-qwen/bin/python services/qwen3_vl/server.py --device auto
 ```
 
 웹 서버:
 
 ```bash
-.venv/bin/python server.py
+.venv/bin/python -m shopmate.server
 # http://127.0.0.1:8000
 ```
 
 검색 노출·주문 이벤트를 적재하는 워커는 별도 프로세스입니다.
 
 ```bash
-.venv/bin/python event_pipeline.py
+.venv/bin/python -m shopmate.store.events
 ```
 
 ## 상품 데이터
@@ -96,23 +112,6 @@ python3 -m venv .venv-qwen
 | 사진 검색 벡터 (Qwen3-VL, 1536차원) | `product_multimodal_embeddings` (`QWEN3_VL_RECIPE` 조리법) |
 | 폴백 사진 벡터 (SigLIP 2, 768차원) | `product_media_embeddings` |
 | 데모 주문 템플릿 (선택) | `demo_order_templates` |
-
-## 주요 코드
-
-| 파일 | 역할 |
-|---|---|
-| `server.py` | HTTP API, 세션 쿠키, 사진 업로드, 승인 엔드포인트 |
-| `agent.py` | 모델 호출 루프, Tool 실행, 승인 대기·재개, 응답 검증 |
-| `agency.py` | 계획 없이 결과를 관찰하고 안전한 누락만 보완 |
-| `tools_pg.py` | LLM에 노출하는 Tool 스키마와 구현, 인자 검증 |
-| `store_pg.py` | 쇼핑몰 도메인 규칙 — 재고·장바구니·결제·취소·반품 |
-| `db_pg.py`, `session_db.py` | 업무 DB·세션 DB 접근 |
-| `filter_resolution.py` | 사용자가 말한 조건만 하드 필터로 남기는 판정 |
-| `retrieval.py` | 검색 경로 선택과 폴백 |
-| `shopping_image_analysis.py` | 사진 분석(VLM), 아이템 선택, 크롭 |
-| `visual_search_query.py`, `multimodal_query.py` | 사진 검색문 조립 |
-| `search_qwen3_vl.py`, `search_siglip.py`, `multimodal_search.py` | 벡터 검색과 RRF 결합 |
-| `event_pipeline.py` | transactional outbox 이벤트 워커 |
 
 ## 데이터와 라이선스
 

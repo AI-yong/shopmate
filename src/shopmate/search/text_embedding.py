@@ -1,6 +1,6 @@
 """임베딩 읽기 — 상품 문서 벡터(products.embedding)와 질의 모델.
 
-`store_pg.py` 가 쓰는 두 함수.
+`store/shop.py` 가 쓰는 두 함수.
 
     load_matrix(conn)    -> (ids, matrix)   문서 벡터
     query_backend(conn)  -> backend         질의를 같은 공간으로 인코딩
