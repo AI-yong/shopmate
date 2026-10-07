@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOPMATE</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" as="style" crossorigin
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+<link rel="stylesheet" href="./styles.css?v=20260930f" />
+</head>
+<body>
+
+<!-- ══════════════════════════════ 헤더 -->
+<header class="hdr" id="hdr">
+  <div class="hdr-in">
+    <a class="logo" href="#/" data-home="1" aria-label="SHOPMATE 처음 화면">SHOP<em>MATE</em></a>
+
+    <form class="search" id="searchForm" role="search">
+      <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="searchInput" type="search" placeholder="상품명 · 브랜드 · 색상 · 소재로 검색" autocomplete="off" />
+      <button type="button" class="search-x" id="searchClear" aria-label="검색어 지우기" hidden>&times;</button>
+    </form>
+
+    <nav class="util">
+      <div class="user-menu" id="userMenu" hidden>
+        <button class="util-b" id="userBtn" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+          <span id="userLabel">사용자</span>
+          <svg viewBox="0 0 24 24" class="ic chev-s"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="user-pop" id="userPop" role="menu" hidden></div>
+      </div>
+      <button class="util-b" data-nav="orders">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M4 7h16v13H4z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/></svg>
+        <span>주문</span><b id="ordersCount">0</b>
+      </button>
+      <button class="util-b" data-nav="cart">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M5 8h14l-1.2 11.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
+        <span>장바구니</span><b id="cartCount" class="hot">0</b>
+      </button>
+      <button class="util-b dock-toggle" id="dockToggle">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1.2-4.3A8 8 0 1 1 21 12z"/></svg>
+        <span>상담</span>
+      </button>
+    </nav>
+  </div>
+
+  <div class="catnav" id="catnav"></div>
+</header>
+
+<!-- ══════════════════════════════ 본문 -->
+<main id="main">
+
+  <!-- 홈 -->
+  <section class="view" id="view-shop">
+    <div class="hero" id="hero">
+      <div class="hero-track" id="heroTrack"></div>
+      <button class="hero-arw l" data-hero="-1" aria-label="이전">&#8249;</button>
+      <button class="hero-arw r" data-hero="1" aria-label="다음">&#8250;</button>
+      <div class="hero-dots" id="heroDots"></div>
+    </div>
+
+    <div class="toolbar">
+      <div class="chips" id="filterChips"></div>
+      <div class="tools-right">
+        <span class="count" id="resultCount"></span>
+        <div class="select">
+          <select id="sortSel">
+            <option value="recommend" selected>추천순</option>
+            <option value="wish">찜 많은순</option>
+            <option value="price_asc">낮은 가격순</option>
+            <option value="price_desc">높은 가격순</option>
+            <option value="rating">평점순</option>
+            <option value="review">리뷰 많은순</option>
+          </select>
+          <svg viewBox="0 0 24 24" class="ic"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid" id="grid"></div>
+    <div class="more-wrap"><button class="btn ghost wide" id="moreBtn">더 보기</button></div>
+  </section>
+
+  <!-- 상세 -->
+  <section class="view" id="view-detail" hidden></section>
+
+  <!-- 장바구니 -->
+  <section class="view" id="view-cart" hidden></section>
+
+  <!-- 주문 -->
+  <section class="view" id="view-orders" hidden></section>
+</main>
+
+<footer class="ftr">
+  <div class="ftr-in">
+    <div class="ftr-logo">SHOP<em>MATE</em></div>
+    <p>자연어 요청을 쇼핑 작업으로 연결하는 사내 OJT 프로젝트 · 공개 상품 메타데이터와 합성 가격·재고를 사용합니다</p>
+  </div>
+</footer>
+
+<!-- ══════════════════════════════ 상담 도크 -->
+<aside class="dock" id="dock">
+  <div class="dock-hd">
+    <div class="dock-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32"><path d="M10 12V9.5a6 6 0 0 1 12 0V12h3.2l1.3 14.5H5.5L6.8 12H10zm2.2 0h7.6V9.5a3.8 3.8 0 0 0-7.6 0V12z"/></svg>
+    </div>
+    <div class="dock-title">
+      <b>SHOPMATE <span>상담</span></b>
+      <i><span class="dot-live"></span><em id="dockState">대기 중</em></i>
+    </div>
+    <button class="icon-b dock-close" id="dockClose" aria-label="닫기">
+      <svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <div class="dock-body" id="dockBody"></div>
+
+  <div class="dock-pending" id="dockPending" hidden></div>
+
+  <div class="dock-samples" id="dockSamples"></div>
+
+  <div class="image-attachment" id="imageAttachment" hidden></div>
+
+  <form class="dock-in" id="chatForm">
+    <div class="dock-field">
+      <button class="attach" id="imageAttach" type="button" aria-label="사진 첨부" title="사진 첨부">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M5 17l4.5-5 3.2 3.5 2.2-2.5L19 17M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zm2.5 5.5h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <input id="imageFile" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+      <input id="chatInput" placeholder="무엇을 찾아드릴까요?" autocomplete="off" />
+      <button class="send" type="submit" aria-label="보내기">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <small>되돌릴 수 없는 작업(결제·취소·반품)은 버튼으로 한 번 더 확인합니다</small>
+  </form>
+</aside>
+
+<div class="scrim" id="scrim" hidden></div>
+<div class="toasts" id="toasts"></div>
+
+<script type="module" src="./app.js?v=20260930f"></script>
+</body>
+</html>

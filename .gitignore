@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 가상환경
+.venv/
+.venv-*/
+venv/
+env/
+
+# 비밀 정보 — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+*.env
+*.key
+*.pem
+
+# 데이터 — 원본 메타데이터·상품 이미지·DB 덤프·객체 저장소 (DATA_USAGE.md)
+data/
+*.db
+*.sqlite3
+*.dump
+*.backup
+
+# 실험·평가 산출물
+experiments/
+eval_*.json
+
+# 이미지·발표자료 (상품 사진과 사용자 사진은 재배포하지 않는다)
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.pptx
+*.ppt
+*.key
+
+# 로그
+logs/
+*.log
+
+# 편집기 / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+~$*
